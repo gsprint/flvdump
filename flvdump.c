@@ -207,12 +207,51 @@ int main(int argc, char **argv)
             {
                 switch (*current >> 4)
                 {
-                    case 1:  printf("kf"); break;
-                    case 2:  printf("if"); break;
-                    case 3:  printf("dif"); break;
-                    case 4:  printf("gkf"); break;
-                    case 5:  printf("cf"); break;
-                    default: printf("?? "); break;
+                    case 1:  printf("kf "); break;
+                    case 2:  printf("if "); break;
+                    case 3:  printf("dif "); break;
+                    case 4:  printf("gkf "); break;
+                    case 5:  printf("cf "); break;
+                    default: printf("??? "); break;
+                }
+                switch (*current & 0x0f)
+                {
+                    case 2:
+                         switch (((*(current + 4) & 0x03) << 1) + (*(current + 5) >> 7))
+                         {
+                             case 0: printf("%dx%d ",
+                                            ((*(current + 5) << 1) & 0xfe) + ((*(current + 6) >> 7) & 0x01),
+                                            ((*(current + 6) << 1) & 0xfe) + ((*(current + 7) >> 7) & 0x01)
+                                           );
+                                     break;
+                             case 1: printf("%dx%d ",
+                                            ((((*(current + 5) << 1) & 0xfe) + ((*(current + 6) >> 7) & 0x01)) << 8) + ((*(current + 6) << 1) & 0xfe) + ((*(current + 7) >> 7) & 0x01),
+                                            ((((*(current + 7) << 1) & 0xfe) + ((*(current + 8) >> 7) & 0x01)) << 8) + ((*(current + 8) << 1) & 0xfe) + ((*(current + 9) >> 7) & 0x01)
+                                           );
+                                     break;
+                             case 2: printf("352x288 "); break;
+                             case 3: printf("176x144 "); break;
+                             case 4: printf("128x96 ");  break;
+                             case 5: printf("320x240 "); break;
+                             case 6: printf("160x120 "); break;
+                         }
+                         break;
+
+                    case 3:
+                    case 6:
+                         printf("%dx%d ", ((*(current + 1) & 0x0f) << 8) + *(current + 2), ((*(current + 3) & 0x0f) << 8) + *(current + 4));
+                         break;
+
+                    case 4:
+                         printf("%dx%d ", (*(current + 8) * 16) - (*(current + 1) >> 4), (*(current + 7) * 16) - (*(current + 1) & 0x0f));
+                         break;
+
+                    case 5:
+                         break;
+
+                    case 7:
+                        printf("+%dms", (*(current + 2) << 24) + (*(current + 3) << 8) + *(current + 4));
+                        break;
                 }
                 printf("\n");
                 if (bdump)
