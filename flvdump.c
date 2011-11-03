@@ -51,37 +51,38 @@ char *ms2tc(u_int32_t ms, u_char mode)
 // Human-readable memory dump
 void hexdump(u_char *input, u_int32_t size, u_int32_t indent)
 {
-    u_int32_t index1, index2 = 0; 
+    u_int32_t index1, index2 = 0;
     char      ascii[64], spaces[64];
 
-    memset(ascii, 0, sizeof(ascii));
     memset(spaces, ' ', sizeof(spaces));
     spaces[min(indent, sizeof(spaces) - 1)] = 0;
-    printf("%s00000000  ", spaces);
+    sprintf(ascii, "%%%ldd 00000000  ", min(indent, sizeof(spaces) - 1) - 1);
+    printf(ascii, size);
+    memset(ascii, 0, sizeof(ascii));
     for (index1 = 0; index1 < size; index1 ++)
-    {    
-        if (index1 && ! (index1 % 16)) 
-        {    
+    {
+        if (index1 && ! (index1 % 16))
+        {
             printf(" ");
-            if (! (index1 % 32)) 
-            {    
+            if (! (index1 % 32))
+            {
                 printf("%s\n%s%08x  ", ascii, spaces, index1);
                 memset(ascii, 0, sizeof(ascii));
-                index2 = 0; 
-            }    
-        }    
+                index2 = 0;
+            }
+        }
         printf("%02x ", input[index1]);
-        ascii[index2 ++] = isprint(input[index1]) ? input[index1] : '.'; 
-    }    
+        ascii[index2 ++] = isprint(input[index1]) ? input[index1] : '.';
+    }
     index1 = strlen(ascii);
     if (index1)
-    {    
+    {
         for (index2 = 0; index2 < 32 - index1; index2 ++)
-        {    
+        {
             printf("   ");
-        }    
+        }
         printf("%s %s\n", index1 >= 16 ? "" : " ", ascii);
-    }    
+    }
 }
 
 // Main program entry
@@ -89,7 +90,7 @@ int main(int argc, char **argv)
 {
     struct stat info;
     int         source;
-    u_int32_t   last = 0, time, size;
+    u_int32_t   last = 0, time, size, dsize;
     u_char      *data, *current, type, bsize = 0, bdump = 0;
 
     TRAP(argc < 2, 1, "Usage: fldump [-s] [-d] <file>");
@@ -158,10 +159,10 @@ int main(int argc, char **argv)
                 case 15:  printf("device "); break;
                 default: printf("??? "); break;
             }
+            dsize = size - ((*current >> 4) == 10 ? 2 : 1);
             if ((*current >> 4) == 10 && *(current + 1) == 0)
             {
                 printf("sh\n");
-                hexdump(current + 2, size - 2, 12 + (bsize * 7));
             }
             else
             {
@@ -175,10 +176,6 @@ int main(int argc, char **argv)
                 printf("%s ", (*current & 0x02) ? "16bit" : "8bit");
                 printf("%s ", (*current & 0x01) ? "stereo" : "mono");
                 printf("\n");
-                if (bdump)
-                {
-                    hexdump(current, size, 12 + (bsize * 7));
-                }
             }
         }
         else if (type == 9)
@@ -197,11 +194,12 @@ int main(int argc, char **argv)
             if ((*current & 0x0f) == 7 && *(current + 1) == 0)
             {
                 printf("sh\n");
-                hexdump(current + 5, size - 5, 12 + (bsize * 7));
+                dsize = size - 5;
             }
             else if ((*current & 0x0f) == 7 && *(current + 1) == 2)
             {
                 printf("eos\n");
+                dsize = 0;
             }
             else
             {
@@ -211,7 +209,7 @@ int main(int argc, char **argv)
                     case 2:  printf("if "); break;
                     case 3:  printf("dif "); break;
                     case 4:  printf("gkf "); break;
-                    case 5:  printf("cf "); break;
+                    case 5:  printf("vicfcf "); break;
                     default: printf("??? "); break;
                 }
                 switch (*current & 0x0f)
@@ -254,19 +252,17 @@ int main(int argc, char **argv)
                         break;
                 }
                 printf("\n");
-                if (bdump)
-                {
-                    hexdump(current, size, 12 + (bsize * 7));
-                }
+                dsize = size - ((*current & 0x0f) == 7 ? 5 : 1);
             }
         }
         else
         {
             printf("\n");
-            if (bdump)
-            {
-                hexdump(current, size, 12 + (bsize * 7));
-            }
+            dsize = size;
+        }
+        if (bdump && dsize)
+        {
+            hexdump(current + size - dsize, dsize, 12 + (bsize * 7));
         }
         current += size + 4;
     }
