@@ -118,7 +118,7 @@ int main(int argc, char **argv)
     {
         last = TAGTIME(data + info.st_size - last) - TAGTIME(data + 9 + 4 + 4);
     }
-    printf("Filename: %s\n", argv[1]);
+    printf("Filename: %s\n", *argv);
     printf("Filesize: %lu bytes\n", info.st_size);
     printf("Version:  %d\n", data[3]);
     printf("Duration: %s\n", ms2tc(last, 1));
