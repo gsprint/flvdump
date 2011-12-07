@@ -91,9 +91,9 @@ int main(int argc, char **argv)
     struct stat info;
     int         source;
     u_int32_t   last = 0, time, size, dsize;
-    u_char      *data, *current, type, bsize = 0, bdump = 0;
+    u_char      *data, *current, type, bsize = 0, bdump = 0, blazy = 0;
 
-    TRAP(argc < 2, 1, "Usage: fldump [-s] [-d] <file>");
+    TRAP(argc < 2, 1, "Usage: fldump [-s] [-d] [-l] <file>");
     argv ++;
     while (*argv)
     {
@@ -105,6 +105,10 @@ int main(int argc, char **argv)
         {
             bdump = 1;
         }
+        else if (! strcmp(*argv, "-l"))
+        {
+            blazy = 1;
+        }
         else
         {
             break;
@@ -113,8 +117,8 @@ int main(int argc, char **argv)
     }
     TRAP(!*argv || stat(*argv, &info) < 0 || !S_ISREG(info.st_mode) || (source = open(*argv, O_RDONLY)) < 0 || !(data = mmap(NULL, info.st_size, PROT_READ, MAP_PRIVATE, source, 0)), 2, "Cannot open FLV file - aborting");
     TRAP(info.st_size < 9 + 4 || memcmp(data, "FLV", 3) || FLVSIZE(data + 5) != 9 || FLVSIZE(data + 9) != 0, 3, "Invalid FLV file - aborting");
-    TRAP(info.st_size - (last = FLVSIZE(data + info.st_size - 4)) < 0, 4, "Malformed FLV file - aborting");
-    if (info.st_size > 9 + 4)
+    TRAP(!blazy && info.st_size - (last = FLVSIZE(data + info.st_size - 4)) < 0, 4, "Malformed FLV file - aborting");
+    if (!blazy && info.st_size > 9 + 4)
     {
         last = TAGTIME(data + info.st_size - last) - TAGTIME(data + 9 + 4 + 4);
     }
