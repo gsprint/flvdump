@@ -129,6 +129,7 @@ int main(int argc, char **argv)
     u_int32_t   last = 0, time, size, dsize;
     u_char      *data, *current, type, bsize = 0, bdump = 0, blazy = 0, bshowavcnalu = 0;
     u_char      bisannexB = 0, naluSizeLenght = 4;
+    uint32_t    videoframesfromlastkf = 0;
 
     TRAP(argc < 2, 1, "Usage: fldump [-s] [-d] [-l] [-n] <file>\n s: Show sizes, d: show data dump, l: lazy mode, do not break on some errors, -n Decode AVCC/AnnexB NALU type");
     argv ++;
@@ -294,7 +295,10 @@ int main(int argc, char **argv)
             {
                 switch (*current >> 4)
                 {
-                    case 1:  printf("kf "); break;
+                    case 1:
+                        printf("kf (last kf: %d frames ago)", videoframesfromlastkf);
+                        videoframesfromlastkf = 0;
+                    break;
                     case 2:  printf("if "); break;
                     case 3:  printf("dif "); break;
                     case 4:  printf("gkf "); break;
@@ -394,6 +398,8 @@ int main(int argc, char **argv)
                 }
                 printf("\n");
                 dsize = size - ((*current & 0x0f) == 7 ? 5 : 1);
+
+                videoframesfromlastkf++;
             }
         }
         else
