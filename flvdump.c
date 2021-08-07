@@ -128,8 +128,9 @@ int main(int argc, char **argv)
     int         source;
     u_int32_t   last = 0, time, size, dsize;
     u_char      *data, *current, type, bsize = 0, bdump = 0, blazy = 0, bshowavcnalu = 0;
-    u_char      bisannexB = 0, naluSizeLenght = 4;
+    u_char      bisannexB = 0, naluSizeLength = 4;
     uint32_t    videoframesfromlastkf = 0;
+    char        err[1024];
 
     TRAP(argc < 2, 1, "Usage: fldump [-s] [-d] [-l] [-n] <file>\n s: Show sizes, d: show data dump, l: lazy mode, do not break on some errors, -n Decode AVCC/AnnexB NALU type");
     argv ++;
@@ -239,6 +240,7 @@ int main(int argc, char **argv)
             }
             if ((*current & 0x0f) == 7 && *(current + 1) == 0)
             {
+                printf("sh");
                 if (bshowavcnalu) {
                     u_char pos = 2;
                     if ((pos + 3) >= size) {
@@ -247,8 +249,6 @@ int main(int argc, char **argv)
                     }
                     else
                     {
-                        printf("sh");
-
                         int compositionTime = *(current + pos) << 16 | *(current + pos + 1) << 8 | *(current + pos + 2);
                         // Should be 0 in AVCC Header
                         printf(" +%dms", compositionTime);
@@ -269,19 +269,63 @@ int main(int argc, char **argv)
                             u_char AVCLevelIndication = *(current + pos + 3);
                             u_char reserved252 = *(current + pos + 4) & 0b11111100; // 252
                             u_char lengthSizeMinusOne = *(current + pos + 4) & 0b11;
-                            naluSizeLenght = lengthSizeMinusOne + 1;
+                            naluSizeLength = lengthSizeMinusOne + 1;
                             u_char reserved224 = *(current + pos + 5) & 0b11100000; //224
                             u_char numOfSequenceParameterSets = *(current + pos + 5) & 0b00011111;
-                            pos += 5;
-
-                            printf(" ConfigurationVersion: %d, avcProfileIndication: %d, profile_compatibility: %d, AVCLevelIndication: %d, reserved252: %d, lengthSize: %d, reserved224: %d, numOfSequenceParameterSets: %d\n",configurationVersion, avcProfileIndication, profile_compatibility, AVCLevelIndication, reserved252 , naluSizeLenght, reserved224, numOfSequenceParameterSets);
+                            u_int32_t spsLengthBytes = 0, ppsLengthBytes = 0;
+                            pos += 6;
+                            u_int32_t i = 0;
+                            while ((i < numOfSequenceParameterSets) && ((pos + 2) < size)) {
+                                spsLengthBytes = *(current + pos) << 8 | *(current + pos + 1);
+                                pos += 2;
+                                pos += spsLengthBytes;
+                                i++;
+                                sprintf(err, "SPS size is probably wrong (numOfSequenceParameterSets: %d, spsLengthBytes: %d, pos: %d, size: %d), out of bounds reading SPS", numOfSequenceParameterSets, spsLengthBytes, pos, size);
+                                TRAP(!blazy && (pos > size), 8, err);
+                            }
+                            u_char numOfPictureParameterSets = *(current + pos);
+                            pos++;
+                            i = 0;
+                            while ((i < numOfPictureParameterSets) && ((pos + 2) < size)) {
+                                ppsLengthBytes = *(current + pos) << 8 | *(current + pos + 1);
+                                pos += 2;
+                                pos += ppsLengthBytes;
+                                i++;
+                                sprintf(err, "PPS size is probably wrong (numOfPictureParameterSets: %d, ppsLengthBytes: %d, pos: %d, size: %d), out of bounds reading PPS", numOfPictureParameterSets, ppsLengthBytes, pos, size);
+                                TRAP(!blazy && (pos > size), 9, err);
+                            }
+                            printf(" ConfigurationVersion: %d, avcProfileIndication: %d, profile_compatibility: %d, AVCLevelIndication: %d, reserved252: %d, lengthSize: %d, reserved224: %d, numOfSequenceParameterSets: %d, spsLengthBytes = %d, ppsLengthBytes: %d", configurationVersion, avcProfileIndication, profile_compatibility, AVCLevelIndication, reserved252 , naluSizeLength, reserved224, numOfSequenceParameterSets, spsLengthBytes, ppsLengthBytes);
+                            if ( avcProfileIndication != 66 && avcProfileIndication != 77 && avcProfileIndication != 88 ) {
+                                sprintf(err, "AVCDecoderConfigurationRecord seems malformed, for avcProfileIndication = %d needs to contain extended params (pos: %d, size: %d)", avcProfileIndication, pos, size);
+                                TRAP(!blazy && (pos + 4 > size), 10, err);
+                                if (pos + 4 <= size) {
+                                    u_char reserved252 = *(current + pos) & 0b11111100; // 252
+                                    u_char chromaFormat = *(current + pos) & 0b11;
+                                    u_char reserved248 = *(current + pos + 1) & 0b11111000; // 248
+                                    u_char bitDepthLumaMinus8 = *(current + pos + 1) & 0b111;
+                                    u_char bitDepthLuma = bitDepthLumaMinus8 + 8;
+                                    u_char reserved248_2 = *(current + pos + 2) & 0b11111000; // 248
+                                    u_char bitDepthChromaMinus8 = *(current + pos + 2) & 0b111;
+                                    u_char bitDepthChroma = bitDepthChromaMinus8 + 8;
+                                    u_char numOfSequenceParameterSetExt = *(current + pos + 3);
+                                    printf(" reserved252: %d, chromaFormat: %d, reserved248: %d, bitDepthLuma: %d, reserved248_2: %d, bitDepthChroma: %d, numOfSequenceParameterSetExt: %d", reserved252, chromaFormat, reserved248, bitDepthLuma, reserved248_2 , bitDepthChroma, numOfSequenceParameterSetExt);
+                                    pos += 4;
+                                    i = 0;
+                                    while ((i < numOfSequenceParameterSetExt) && ((pos + 2) < size)) {
+                                        u_int32_t spsExtLengthBytes = *(current + pos) << 8 | *(current + pos + 1);
+                                        pos += 2;
+                                        pos += spsExtLengthBytes;
+                                        i++;
+                                        sprintf(err, "SPS Ext size is probably wrong (numOfSequenceParameterSetExt: %d, spsExtLengthBytes: %d, pos: %d, size: %d), out of bounds reading SPS", numOfSequenceParameterSetExt, spsExtLengthBytes, pos, size);
+                                        TRAP(!blazy && (pos > size), 11, err);
+                                    }
+                                }                                
+                                //TODO
+                            }
                         }
                     }
                 }
-                else
-                {
-                    printf("sh\n");
-                }
+                printf("\n");
                 dsize = size - 5;
             }
             else if ((*current & 0x0f) == 7 && *(current + 1) == 2)
@@ -375,16 +419,16 @@ int main(int argc, char **argv)
                             {
                                 printf(", AVCC NALUs: ");
                                 // Show NALU types
-                                while ((pos + naluSizeLenght) < size)
+                                while ((pos + naluSizeLength) < size)
                                 {
                                     u_int32_t naluSize = 0;
                                     u_char i = 0;
-                                    while (i < naluSizeLenght)
+                                    while (i < naluSizeLength)
                                     {
-                                        naluSize = naluSize | *(current + pos + i) << ((naluSizeLenght - 1 - i)*8);
+                                        naluSize = naluSize | *(current + pos + i) << ((naluSizeLength - 1 - i)*8);
                                         i++;
                                     }
-                                    pos += naluSizeLenght;
+                                    pos += naluSizeLength;
                                     if (naluSize > 0)
                                     {
                                         u_char nal_unit_type = *(current + pos) & 0b00011111;
