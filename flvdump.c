@@ -127,12 +127,12 @@ int main(int argc, char **argv)
     struct stat info;
     int         source;
     u_int32_t   last = 0, time, size, dsize;
-    u_char      *data, *current, type, bsize = 0, bdump = 0, blazy = 0, bshowavcnalu = 0;
+    u_char      *data, *current, *lastCurrentTag, type, bsize = 0, bdump = 0, blazy = 0, bshowavcnalu = 0, bshowoffsets =0;
     u_char      bisannexB = 0, naluSizeLength = 4;
     uint32_t    videoframesfromlastkf = 0;
     char        err[1024];
 
-    TRAP(argc < 2, 1, "Usage: fldump [-s] [-d] [-l] [-n] <file>\n s: Show sizes, d: show data dump, l: lazy mode, do not break on some errors, -n Decode AVCC/AnnexB NALU type");
+    TRAP(argc < 2, 1, "Usage: fldump [-s] [-o] [-d] [-l] [-n] <file>\n s: Show sizes, s: Show offsets, d: show data dump, l: lazy mode, do not break on some errors, -n Decode AVCC/AnnexB NALU type");
     argv ++;
     while (*argv)
     {
@@ -151,6 +151,10 @@ int main(int argc, char **argv)
         else if (! strcmp(*argv, "-n"))
         {
             bshowavcnalu = 1;
+        }
+        else if (! strcmp(*argv, "-o"))
+        {
+            bshowoffsets = 1;
         }
         else
         {
@@ -173,6 +177,8 @@ int main(int argc, char **argv)
     current = data + 9 + 4;
     while (1)
     {
+        lastCurrentTag = data;
+
         if (current + 4 >= data + info.st_size)
         {
             break;
@@ -180,13 +186,16 @@ int main(int argc, char **argv)
         type     = *current;
         size     = TAGSIZE(current + 1);
         time     = TAGTIME(current + 4);
-        current += 11;
         printf("%s ", ms2tc(time, 0));
+        if (bshowoffsets) {
+            printf("(%6ld) ", current - lastCurrentTag);
+        }
         if (bsize)
         {
             printf("%6d ", size);
         }
         printf("%s ", TAGTYPE(type));
+        current += 11;
         if (type == 8) // Audio
         {
             switch (*current >> 4)
@@ -294,7 +303,7 @@ int main(int argc, char **argv)
                                 sprintf(err, "PPS size is probably wrong (numOfPictureParameterSets: %d, ppsLengthBytes: %d, pos: %d, size: %d), out of bounds reading PPS", numOfPictureParameterSets, ppsLengthBytes, pos, size);
                                 TRAP(!blazy && (pos > size), 9, err);
                             }
-                            printf(" ConfigurationVersion: %d, avcProfileIndication: %d, profile_compatibility: %d, AVCLevelIndication: %d, reserved252: %d, lengthSize: %d, reserved224: %d, numOfSequenceParameterSets: %d, spsLengthBytes = %d, ppsLengthBytes: %d", configurationVersion, avcProfileIndication, profile_compatibility, AVCLevelIndication, reserved252 , naluSizeLength, reserved224, numOfSequenceParameterSets, spsLengthBytes, ppsLengthBytes);
+                            printf(" ConfigurationVersion: %d, avcProfileIndication: %d, profile_compatibility: %d, AVCLevelIndication: %d, reserved252: %d, lengthSize: %d, reserved224: %d, numOfSequenceParameterSets: %d, spsLengthBytes = %d, numOfPictureParameterSets: %d, ppsLengthBytes: %d", configurationVersion, avcProfileIndication, profile_compatibility, AVCLevelIndication, reserved252 , naluSizeLength, reserved224, numOfSequenceParameterSets, spsLengthBytes, numOfPictureParameterSets, ppsLengthBytes);
                             if ( avcProfileIndication != 66 && avcProfileIndication != 77 && avcProfileIndication != 88 ) {
                                 sprintf(err, "AVCDecoderConfigurationRecord seems malformed, for avcProfileIndication = %d needs to contain extended params (pos: %d, size: %d)", avcProfileIndication, pos, size);
                                 TRAP(!blazy && (pos + 4 > size), 10, err);
