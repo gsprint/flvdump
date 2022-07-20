@@ -85,15 +85,54 @@ void hexdump(u_char *input, u_int32_t size, u_int32_t indent)
     }
 }
 
+u_char isAnnexB4Bytes(u_char *input, u_int32_t pos, u_int32_t size) {
+    u_char ret = 0;
+
+    if ((pos + 4 < size) && (*(input + pos ) == 0x0) && (*(input + pos + 1) == 0x00) && (*(input + pos + 2) == 0x00) && (*(input + pos + 3) == 0x01))
+        ret = 1;
+
+    return ret;
+}
+
+u_char isAnnexB3Bytes(u_char *input, u_int32_t pos, u_int32_t size) {
+    u_char ret = 0;
+
+    if ((pos + 3 < size) && (*(input + pos ) == 0x0) && (*(input + pos + 1) == 0x00) && (*(input + pos + 2) == 0x01))
+        ret = 1;
+
+    return ret;
+}
+
+u_int32_t findAnnexBStartCode(u_char *input, u_int32_t pos, u_int32_t size, u_char annexStartCodeBytes) {
+    while ((pos + annexStartCodeBytes) < size) {
+        if (annexStartCodeBytes == 3) {
+            if (!isAnnexB3Bytes(input, pos, size))
+                pos++;
+            else
+                break;
+        }
+        else {
+            if (!isAnnexB4Bytes(input, pos, size))
+                pos++;
+            else
+                break;
+        }
+    }
+    return pos;
+}
+
 // Main program entry
 int main(int argc, char **argv)
 {
     struct stat info;
     int         source;
     u_int32_t   last = 0, time, size, dsize;
-    u_char      *data, *current, type, bsize = 0, bdump = 0, blazy = 0;
+    u_char      *data, *current, *lastCurrentTag, type, bsize = 0, bdump = 0, blazy = 0, bshowavcnalu = 0, bshowoffsets =0;
+    u_char      bisannexB = 0, naluSizeLength = 4;
+    uint32_t    videoframesfromlastkf = 0;
+    char        err[1024];
 
-    TRAP(argc < 2, 1, "Usage: fldump [-s] [-d] [-l] <file>");
+    TRAP(argc < 2, 1, "Usage: fldump [-s] [-o] [-d] [-l] [-n] <file>\n s: Show sizes, o: Show offsets, d: show data dump, l: lazy mode, do not break on some errors, -n Decode AVCC/AnnexB NALU type");
     argv ++;
     while (*argv)
     {
@@ -109,6 +148,14 @@ int main(int argc, char **argv)
         {
             blazy = 1;
         }
+        else if (! strcmp(*argv, "-n"))
+        {
+            bshowavcnalu = 1;
+        }
+        else if (! strcmp(*argv, "-o"))
+        {
+            bshowoffsets = 1;
+        }
         else
         {
             break;
@@ -123,13 +170,15 @@ int main(int argc, char **argv)
         last = TAGTIME(data + info.st_size - last) - TAGTIME(data + 9 + 4 + 4);
     }
     printf("Filename: %s\n", *argv);
-    printf("Filesize: %lu bytes\n", info.st_size);
+    printf("Filesize: %lld bytes\n", info.st_size);
     printf("Version:  %d\n", data[3]);
     printf("Duration: %s\n", ms2tc(last, 1));
     printf("Tracks:   %s%s\n\n", (data[4] & 0x04) ? "audio " : "", (data[4] & 0x01) ? "video" : "");
     current = data + 9 + 4;
     while (1)
     {
+        lastCurrentTag = data;
+
         if (current + 4 >= data + info.st_size)
         {
             break;
@@ -137,14 +186,17 @@ int main(int argc, char **argv)
         type     = *current;
         size     = TAGSIZE(current + 1);
         time     = TAGTIME(current + 4);
-        current += 11;
         printf("%s ", ms2tc(time, 0));
+        if (bshowoffsets) {
+            printf("(%6ld) ", current - lastCurrentTag);
+        }
         if (bsize)
         {
             printf("%6d ", size);
         }
         printf("%s ", TAGTYPE(type));
-        if (type == 8)
+        current += 11;
+        if (type == 8) // Audio
         {
             switch (*current >> 4)
             {
@@ -182,7 +234,7 @@ int main(int argc, char **argv)
                 printf("\n");
             }
         }
-        else if (type == 9)
+        else if (type == 9) // Video
         {
             switch (*current & 0x0f)
             {
@@ -197,19 +249,109 @@ int main(int argc, char **argv)
             }
             if ((*current & 0x0f) == 7 && *(current + 1) == 0)
             {
-                printf("sh\n");
+                printf("sh");
+                if (bshowavcnalu) {
+                    u_char pos = 2;
+                    if ((pos + 3) >= size) {
+                        TRAP(!blazy, 6, "Can not read Composition time, this looks like annexB, try -l");
+                        bisannexB = 1;
+                    }
+                    else
+                    {
+                        int compositionTime = *(current + pos) << 16 | *(current + pos + 1) << 8 | *(current + pos + 2);
+                        // Should be 0 in AVCC Header
+                        printf(" +%dms", compositionTime);
+
+                        pos += 3;
+                        if ((pos + 6) >= size) {
+                            TRAP(!blazy, 7, "Can not read AVCDecoderConfigurationRecord, this looks like annexB, try -l");
+                            bisannexB = 1;
+                        }
+                        else
+                        {
+                            printf(", AVCDecoderConfigurationRecord:");
+
+                            // AVCDecoderConfigurationRecord
+                            u_char configurationVersion = *(current + pos);
+                            u_char avcProfileIndication = *(current + pos + 1);
+                            u_char profile_compatibility = *(current + pos + 2);
+                            u_char AVCLevelIndication = *(current + pos + 3);
+                            u_char reserved252 = *(current + pos + 4) & 0b11111100; // 252
+                            u_char lengthSizeMinusOne = *(current + pos + 4) & 0b11;
+                            naluSizeLength = lengthSizeMinusOne + 1;
+                            u_char reserved224 = *(current + pos + 5) & 0b11100000; //224
+                            u_char numOfSequenceParameterSets = *(current + pos + 5) & 0b00011111;
+                            u_int32_t spsLengthBytes = 0, ppsLengthBytes = 0;
+                            pos += 6;
+                            u_int32_t i = 0;
+                            while ((i < numOfSequenceParameterSets) && ((pos + 2) < size)) {
+                                spsLengthBytes = *(current + pos) << 8 | *(current + pos + 1);
+                                pos += 2;
+                                pos += spsLengthBytes;
+                                i++;
+                                sprintf(err, "SPS size is probably wrong (numOfSequenceParameterSets: %d, spsLengthBytes: %d, pos: %d, size: %d), out of bounds reading SPS", numOfSequenceParameterSets, spsLengthBytes, pos, size);
+                                TRAP(!blazy && (pos > size), 8, err);
+                            }
+                            u_char numOfPictureParameterSets = *(current + pos);
+                            pos++;
+                            i = 0;
+                            while ((i < numOfPictureParameterSets) && ((pos + 2) < size)) {
+                                ppsLengthBytes = *(current + pos) << 8 | *(current + pos + 1);
+                                pos += 2;
+                                pos += ppsLengthBytes;
+                                i++;
+                                sprintf(err, "PPS size is probably wrong (numOfPictureParameterSets: %d, ppsLengthBytes: %d, pos: %d, size: %d), out of bounds reading PPS", numOfPictureParameterSets, ppsLengthBytes, pos, size);
+                                TRAP(!blazy && (pos > size), 9, err);
+                            }
+                            printf(" ConfigurationVersion: %d, avcProfileIndication: %d, profile_compatibility: %d, AVCLevelIndication: %d, reserved252: %d, lengthSize: %d, reserved224: %d, numOfSequenceParameterSets: %d, spsLengthBytes = %d, numOfPictureParameterSets: %d, ppsLengthBytes: %d", configurationVersion, avcProfileIndication, profile_compatibility, AVCLevelIndication, reserved252 , naluSizeLength, reserved224, numOfSequenceParameterSets, spsLengthBytes, numOfPictureParameterSets, ppsLengthBytes);
+                            if ( avcProfileIndication != 66 && avcProfileIndication != 77 && avcProfileIndication != 88 ) {
+                                sprintf(err, "AVCDecoderConfigurationRecord seems malformed, for avcProfileIndication = %d needs to contain extended params (pos: %d, size: %d)", avcProfileIndication, pos, size);
+                                TRAP(!blazy && (pos + 4 > size), 10, err);
+                                if (pos + 4 <= size) {
+                                    u_char reserved252 = *(current + pos) & 0b11111100; // 252
+                                    u_char chromaFormat = *(current + pos) & 0b11;
+                                    u_char reserved248 = *(current + pos + 1) & 0b11111000; // 248
+                                    u_char bitDepthLumaMinus8 = *(current + pos + 1) & 0b111;
+                                    u_char bitDepthLuma = bitDepthLumaMinus8 + 8;
+                                    u_char reserved248_2 = *(current + pos + 2) & 0b11111000; // 248
+                                    u_char bitDepthChromaMinus8 = *(current + pos + 2) & 0b111;
+                                    u_char bitDepthChroma = bitDepthChromaMinus8 + 8;
+                                    u_char numOfSequenceParameterSetExt = *(current + pos + 3);
+                                    printf(" reserved252: %d, chromaFormat: %d, reserved248: %d, bitDepthLuma: %d, reserved248_2: %d, bitDepthChroma: %d, numOfSequenceParameterSetExt: %d", reserved252, chromaFormat, reserved248, bitDepthLuma, reserved248_2 , bitDepthChroma, numOfSequenceParameterSetExt);
+                                    pos += 4;
+                                    i = 0;
+                                    while ((i < numOfSequenceParameterSetExt) && ((pos + 2) < size)) {
+                                        u_int32_t spsExtLengthBytes = *(current + pos) << 8 | *(current + pos + 1);
+                                        pos += 2;
+                                        pos += spsExtLengthBytes;
+                                        i++;
+                                        sprintf(err, "SPS Ext size is probably wrong (numOfSequenceParameterSetExt: %d, spsExtLengthBytes: %d, pos: %d, size: %d), out of bounds reading SPS", numOfSequenceParameterSetExt, spsExtLengthBytes, pos, size);
+                                        TRAP(!blazy && (pos > size), 11, err);
+                                    }
+                                }                                
+                                //TODO
+                            }
+                        }
+                    }
+                }
+                printf("\n");
                 dsize = size - 5;
             }
             else if ((*current & 0x0f) == 7 && *(current + 1) == 2)
             {
-                printf("eos\n");
+                if (bshowavcnalu)
+                    printf("AVCC endOfSeq\n");
+
                 dsize = 0;
             }
-            else
+            else // NALU
             {
                 switch (*current >> 4)
                 {
-                    case 1:  printf("kf "); break;
+                    case 1:
+                        printf("kf (last kf: %d frames ago)", videoframesfromlastkf);
+                        videoframesfromlastkf = 0;
+                    break;
                     case 2:  printf("if "); break;
                     case 3:  printf("dif "); break;
                     case 4:  printf("gkf "); break;
@@ -252,11 +394,65 @@ int main(int argc, char **argv)
                          break;
 
                     case 7:
-                        printf("+%dms", (*(current + 2) << 24) + (*(current + 3) << 8) + *(current + 4));
+                        if (bshowavcnalu)
+                        {
+                            printf("+%dms", (*(current + 2) << 16) + (*(current + 3) << 8) + *(current + 4));
+                            u_int64_t pos = 5;
+                            if (bisannexB)
+                            {
+                                if ((pos + 3) < size)
+                                {
+                                    printf(", AnnexB NALUs: ");
+                                    u_char annexBSeqBytes = 0;
+                                    if (isAnnexB3Bytes(current, pos, size))
+                                        annexBSeqBytes = 3;
+                                    else if (isAnnexB4Bytes(current, pos, size))
+                                        annexBSeqBytes = 4;
+
+                                    TRAP(!blazy && annexBSeqBytes !=3 && annexBSeqBytes != 4, 6, "We could not find annexB starting code");
+                                    if (annexBSeqBytes !=3 && annexBSeqBytes != 4)
+                                        annexBSeqBytes = 4; // Default to 4 and hope for the best
+
+                                    // Show NALU types
+                                    while ((pos + annexBSeqBytes + 1) < size)
+                                    {
+                                        pos += annexBSeqBytes;
+                                        u_char nal_unit_type = *(current + pos) & 0b00011111;
+                                        u_int32_t next_pos = findAnnexBStartCode(current, pos, size, annexBSeqBytes);
+                                        printf("NALU type: %d (size: %llu) - ", nal_unit_type, next_pos - pos);
+                                        pos = next_pos;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                printf(", AVCC NALUs: ");
+                                // Show NALU types
+                                while ((pos + naluSizeLength) < size)
+                                {
+                                    u_int32_t naluSize = 0;
+                                    u_char i = 0;
+                                    while (i < naluSizeLength)
+                                    {
+                                        naluSize = naluSize | *(current + pos + i) << ((naluSizeLength - 1 - i)*8);
+                                        i++;
+                                    }
+                                    pos += naluSizeLength;
+                                    if (naluSize > 0)
+                                    {
+                                        u_char nal_unit_type = *(current + pos) & 0b00011111;
+                                        printf("NALU type: %d (size: %d) - ", nal_unit_type, naluSize);
+                                    }
+                                    pos += naluSize;
+                                }
+                            }
+                        }
                         break;
                 }
                 printf("\n");
                 dsize = size - ((*current & 0x0f) == 7 ? 5 : 1);
+
+                videoframesfromlastkf++;
             }
         }
         else
