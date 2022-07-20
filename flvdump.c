@@ -132,7 +132,7 @@ int main(int argc, char **argv)
     uint32_t    videoframesfromlastkf = 0;
     char        err[1024];
 
-    TRAP(argc < 2, 1, "Usage: fldump [-s] [-o] [-d] [-l] [-n] <file>\n s: Show sizes, s: Show offsets, d: show data dump, l: lazy mode, do not break on some errors, -n Decode AVCC/AnnexB NALU type");
+    TRAP(argc < 2, 1, "Usage: fldump [-s] [-o] [-d] [-l] [-n] <file>\n s: Show sizes, o: Show offsets, d: show data dump, l: lazy mode, do not break on some errors, -n Decode AVCC/AnnexB NALU type");
     argv ++;
     while (*argv)
     {
